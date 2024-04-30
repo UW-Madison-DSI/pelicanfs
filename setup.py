@@ -24,6 +24,8 @@ setup(
         where='src',
         include=['pelicanfs*'],
     ),
+    long_description=open('README.md').read(),
+    long_description_content_type='text/markdown',
     package_dir={"": "src"},
     python_requires=">=3.7, <4",
     install_requires=["aiohttp==3.9.4", 
