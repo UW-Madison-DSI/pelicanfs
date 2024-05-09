@@ -28,12 +28,12 @@ pip install -e .
 
 ### Using PelicanFS
 
-To use pelicanfs, first create a `PelicanFileSystem` and provide it with the url for the director of your data federation. As an example using the OSDF director
+To use pelicanfs, first create a `PelicanFileSystem` and provide it with the pelican federation url. As an example using the OSDF federation
 
 ```python
 from pelicanfs.core import PelicanFileSystem
 
-pelfs = PelicanFileSystem("https://osdf-director.osg-htc.org/")
+pelfs = PelicanFileSystem("pelican://osg-htc.org")
 ```
 
 Once `pelfs` is pointed at your federation's director, fsspec commands can be applied to Pelican namespaces. For example:
@@ -45,7 +45,7 @@ print(hello_world)
 
 ### Getting an FSMap
 
-Sometimes various systems that interact with an fsspec want a key-value mapper rather than a url. To do that, call the `PelicanMap` function with the namespace path and a `PelicanFileSystem` object rather than using the fsspec `get_mapper` call. For example
+Sometimes various systems that interact with an fsspec want a key-value mapper rather than a url. To do that, call the `PelicanMap` function with the namespace path and a `PelicanFileSystem` object rather than using the fsspec `get_mapper` call. For example:
 
 ```python
 from pelicanfs.core import PelicanFileSystem, PelicanMap
@@ -54,4 +54,47 @@ pelfs = PelicanFileSystem(“some-director-url”)
 file1 = PelicanMap(“/namespace/file/1”, pelfs=pelfs)
 file2 = PelicanMap(“/namespace/file/2”, pelfs=pelfs)
 ds = xarray.open_mfdataset([file1,file2], engine='zarr')
+```
+
+### Specifying Endpoints
+
+The following describes how to specify endpoints to get data from, rather than letting PelicanFS and the director determine the best cache. PelicanFS allows you to specify whether to read directly from the origin (bypassing data staging altogether) or to name a specific cache to stage data into. 
+
+**Note**
+If both direct reads and a specific cache are set, PelicanFS will use the specified cache and ignore the direct reads setting.
+
+
+### Enabling Direct Reads
+
+Sometimes you might wish to read data directly from an origin rather than via a cache. To enable this at PelicanFileSystem creation, just pass in `dirReads=True` to the constructor.
+
+```python
+pelfs = PelicanFileSystem("some-federation-url", dirReads=True)
+```
+
+Direct reads can also be turned on an off using the class function `set_direct_reads` like so:
+
+```python
+pelfs.set_direct_reads(True)
+hello_world_from_origin = pelfs.cat('/ospool/uc-shared/public/OSG-Staff/validation/test.txt')
+```
+
+### Specifying a Cache
+
+If you want to specify a specific cache to stage your data into (as opposed to the highest priority working cache), this can be done by passing in a cache URL during PelicanFileSystem construction via the `specifiedCacheUrl` variable:
+
+```python
+pelfs = PelicanFileSystem("some-federation-url", specifiedCacheUrl="some-cace-url")
+```
+
+Or by setting it via the `set_cache` function like so:
+
+```python
+pelfs.set_cache("some-cache-curl")
+```
+
+You can clear the specifed cache by calling the `reset_cache` function:
+
+```python
+pelfs.reset_cache()
 ```

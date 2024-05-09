@@ -20,6 +20,7 @@ from fsspec.asyn import AsyncFileSystem
 from .dir_header_parser import parse_metalink, get_dirlist_loc
 import fsspec.implementations.http as fshttp
 import aiohttp
+import requests
 import urllib.parse
 import asyncio
 
@@ -43,7 +44,9 @@ class PelicanFileSystem(AsyncFileSystem):
     
     def __init__ (
             self,
-            directorUrl,
+            federationDiscoveryUrl,
+            dirReads = False,
+            specifiedCache = None,
             asynchronous = False,
             loop = None
     ):
@@ -51,10 +54,17 @@ class PelicanFileSystem(AsyncFileSystem):
         # The internal filesystem
         self.httpFileSystem = fshttp.HTTPFileSystem(asynchronous=asynchronous, loop=loop)
 
-        # Ensure the director url ends with a "/"
+        # Perform federation discovery
+        metadata_json = self._discover_federation_metadata(federationDiscoveryUrl)
+
+        # Ensure the director url has a '/' at the end
+        directorUrl = metadata_json['director_endpoint']
         if directorUrl[-1] != "/":
             directorUrl = directorUrl + "/"
         self.directorUrl = directorUrl
+
+        self.directReads = dirReads
+        self.specifiedCache = specifiedCache
 
 
         super().__init__(self, asynchronous=asynchronous, loop=loop)
@@ -74,6 +84,30 @@ class PelicanFileSystem(AsyncFileSystem):
         self._du = self.httpFileSystem._du
         self._info = self.httpFileSystem._info
 
+    def _discover_federation_metadata(self, discUrl):
+        """
+        Returns the json response from a GET call to the metadata discovery url of the federation
+        """
+        # Parse the url for federation discovery
+        discoveryUrl = urllib.parse.urlparse(discUrl)
+
+        discoveryUrl = discoveryUrl._replace(scheme='https')
+        updatedPath = discoveryUrl.path + "/.well-known/pelican-configuration"
+        discoveryUrl = discoveryUrl._replace(path=updatedPath)
+
+        resp = requests.get(discoveryUrl.geturl())
+
+        return resp.json()
+
+
+    def reset_cache(self):
+        self.specifiedCache = None
+
+    def set_cache(self, cacheUrl):
+        self.specifiedCache = cacheUrl
+
+    def set_direct_reads(self, dirReads):
+        self.directReads = dirReads
 
     async def get_director_headers(self, fileloc):
         """
@@ -88,7 +122,7 @@ class PelicanFileSystem(AsyncFileSystem):
 
     async def get_working_cache(self, fileloc):
         """
-        Returns the highest priority cache for the namespace that appears to be owrking
+        Returns the highest priority cache for the namespace that appears to be working
         """
         headers = await self.get_director_headers(fileloc)
         metalist = parse_metalink(headers)[1:]
@@ -110,6 +144,17 @@ class PelicanFileSystem(AsyncFileSystem):
         
         return updatedUrl
 
+
+    async def get_origin_url(self, fileloc):
+        """
+        Returns an origin url for the given namespace location
+        """
+        headers = await self.get_director_headers(fileloc)
+        dirListLoc = get_dirlist_loc(headers)
+        if dirListLoc == None or dirListLoc == "":
+            raise RuntimeError
+        listUrl = dirListLoc + "/" + fileloc
+        return listUrl
     
     def _dirlist_dec(func):
         """
@@ -121,11 +166,7 @@ class PelicanFileSystem(AsyncFileSystem):
         async def wrapper(self, *args, **kwargs):
             path = args[0]
             parsedUrl = urllib.parse.urlparse(path)
-            headers = await self.get_director_headers(parsedUrl.path)
-            dirlistloc = get_dirlist_loc(headers)
-            if dirlistloc == None:
-                raise RuntimeError
-            listUrl = dirlistloc + "/" + parsedUrl.path
+            listUrl = await self.get_origin_url(parsedUrl.path)
             result = await func(self, listUrl, *args[1:], **kwargs)
             return result
         return wrapper
@@ -145,11 +186,7 @@ class PelicanFileSystem(AsyncFileSystem):
     # Not using a decorator because it requires a yield
     async def _walk(self, path, maxdepth=None, on_error="omit", **kwargs):
         parsedUrl = urllib.parse.urlparse(path)
-        headers = await self.get_director_headers(parsedUrl.path)
-        dirlistloc = get_dirlist_loc(headers)
-        if dirlistloc == "":
-            raise RuntimeError
-        listUrl = dirlistloc + "/" + path
+        listUrl = await self.get_origin_url(parsedUrl.path)
         async for _ in self.httpFileSystem._walk(listUrl, maxdepth, on_error, **kwargs):
                 yield _
 
@@ -164,11 +201,14 @@ class PelicanFileSystem(AsyncFileSystem):
         cache_options=None,
         size=None,
         **kwargs,
-    ):    
+    ):
         loop = asyncio.get_event_loop()
-        cache_url = loop.run_until_complete(self.get_working_cache(path))
+        if self.directReads:
+            data_url = loop.run_until_complete(self.get_origin_url(path))
+        else:
+            data_url = loop.run_until_complete(self.get_working_cache(path))
 
-        return self.httpFileSystem._open(cache_url, mode, block_size, autocommit, cache_type, cache_options, size, **kwargs)
+        return self.httpFileSystem._open(data_url, mode, block_size, autocommit, cache_type, cache_options, size, **kwargs)
     
 
 
@@ -185,11 +225,16 @@ class PelicanFileSystem(AsyncFileSystem):
         async def wrapper(self, *args, **kwargs):
             path = args[0]
             parsedUrl = urllib.parse.urlparse(path)
-            if parsedUrl.scheme == "http":
-                cacheUrl = path
+            if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
+                dataUrl = path
             else:
-                cacheUrl = await self.get_working_cache(parsedUrl.path)
-            result = await func(self, cacheUrl, *args[1:], **kwargs)
+                if self.specifiedCache:
+                    dataUrl = self.specifiedCache + "/" + parsedUrl.path
+                elif self.directReads:
+                    dataUrl = await self.get_origin_url(parsedUrl.path)
+                else:
+                    dataUrl = await self.get_working_cache(parsedUrl.path)
+            result = await func(self, dataUrl, *args[1:], **kwargs)
             return result
         return wrapper
     
@@ -206,20 +251,30 @@ class PelicanFileSystem(AsyncFileSystem):
             path = args[0]
             if isinstance(path, str):
                 parsedUrl = urllib.parse.urlparse(path)
-                if parsedUrl.scheme == "http":
-                    cacheUrl = path
+                if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
+                    dataUrl = path
                 else:
-                    cacheUrl = await self.get_working_cache(parsedUrl.path)
+                    if self.specifiedCache:
+                        dataUrl = self.specifiedCache + "/" + parsedUrl.path
+                    elif self.directReads:
+                        dataUrl = await self.get_origin_url(parsedUrl.path)
+                    else:
+                        dataUrl = await self.get_working_cache(parsedUrl.path)
             else:
-                cacheUrl = []
+                dataUrl = []
                 for p in path:
                     parsedUrl = urllib.parse.urlparse(p)
-                    if parsedUrl.scheme == "http":
-                        cUrl = p
+                    if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
+                        dUrl = p
                     else:
-                        cUrl = cacheUrl = await self.get_working_cache(parsedUrl.path)
-                    cacheUrl.append(cUrl)
-            result = await func(self, cacheUrl, *args[1:], **kwargs)
+                        if self.specifiedCache:
+                            dUrl = self.specifiedCache + "/" + parsedUrl.path
+                        elif self.directReads:
+                            dUrl = await self.get_origin_url(parsedUrl.path)
+                        else:
+                            dUrl =  await self.get_working_cache(parsedUrl.path)
+                    dataUrl.append(dUrl)
+            result = await func(self, dataUrl, *args[1:], **kwargs)
             return result
         return wrapper
 
@@ -256,7 +311,15 @@ class PelicanFileSystem(AsyncFileSystem):
 fsspec.register_implementation(PelicanFileSystem.protocol, PelicanFileSystem)
 
 def PelicanMap(root, pelfs, check=False, create=False):
-    loop = asyncio.get_event_loop()
-    cache_url = loop.run_until_complete(pelfs.get_working_cache(root))
+    if pelfs.specifiedCache:
+        return pelfs.get_mapper(pelfs.specifiedCache + "/" + root, check=check, create=create)
 
-    return pelfs.get_mapper(cache_url, check=check, create=create)
+
+    loop = asyncio.get_event_loop()
+    if pelfs.directReads:
+        dataUrl = loop.run_until_complete(pelfs.get_origin_url(root))
+
+    else:
+        dataUrl = loop.run_until_complete(pelfs.get_working_cache(root))
+
+    return pelfs.get_mapper(dataUrl, check=check, create=create)
