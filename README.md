@@ -61,10 +61,10 @@ ds = xarray.open_mfdataset([file1,file2], engine='zarr')
 The following describes how to specify endpoints to get data from, rather than letting PelicanFS and the director determine the best cache. PelicanFS allows you to specify whether to read directly from the origin (bypassing data staging altogether) or to name a specific cache to stage data into. 
 
 **Note**
-If both direct reads and a specific cache are set, PelicanFS will use the specified cache and ignore the direct reads setting.
+> If both direct reads and a specific cache are set, PelicanFS will use the specified cache and ignore the direct reads setting.
 
 
-### Enabling Direct Reads
+#### Enabling Direct Reads
 
 Sometimes you might wish to read data directly from an origin rather than via a cache. To enable this at PelicanFileSystem creation, just pass in `dirReads=True` to the constructor.
 
@@ -79,18 +79,18 @@ pelfs.set_direct_reads(True)
 hello_world_from_origin = pelfs.cat('/ospool/uc-shared/public/OSG-Staff/validation/test.txt')
 ```
 
-### Specifying a Cache
+#### Specifying a Cache
 
 If you want to specify a specific cache to stage your data into (as opposed to the highest priority working cache), this can be done by passing in a cache URL during PelicanFileSystem construction via the `specifiedCacheUrl` variable:
 
 ```python
-pelfs = PelicanFileSystem("some-federation-url", specifiedCacheUrl="some-cace-url")
+pelfs = PelicanFileSystem("some-federation-url", specifiedCacheUrl="some-cache-url")
 ```
 
 Or by setting it via the `set_cache` function like so:
 
 ```python
-pelfs.set_cache("some-cache-curl")
+pelfs.set_cache("some-cache-url")
 ```
 
 You can clear the specifed cache by calling the `reset_cache` function:
