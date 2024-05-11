@@ -14,14 +14,31 @@ See the License for the specific language governing permissions and
 limitations under the License. 
 """
 
+import cachetools
 import fsspec
 import fsspec.registry
-from fsspec.asyn import AsyncFileSystem
+from fsspec.asyn import AsyncFileSystem, sync
 from .dir_header_parser import parse_metalink, get_dirlist_loc
 import fsspec.implementations.http as fshttp
 import aiohttp
 import urllib.parse
 import asyncio
+import threading
+import logging
+
+logger = logging.getLogger("fsspec.pelican")
+
+class PelicanException(RuntimeError):
+    """
+    Base class for all Pelican-related failures
+    """
+    pass
+
+class NoAvailableSource(PelicanException):
+    """
+    No source endpoint is currently available for the requested object
+    """
+    pass
 
 class PelicanFileSystem(AsyncFileSystem):
     """
@@ -47,7 +64,9 @@ class PelicanFileSystem(AsyncFileSystem):
             asynchronous = False,
             loop = None
     ):
-        
+        self._namespace_cache = cachetools.TTLCache(maxsize=50, ttl=15*60)
+        self._namespace_lock = threading.Lock()
+
         # The internal filesystem
         self.httpFileSystem = fshttp.HTTPFileSystem(asynchronous=asynchronous, loop=loop)
 
@@ -90,26 +109,47 @@ class PelicanFileSystem(AsyncFileSystem):
         """
         Returns the highest priority cache for the namespace that appears to be owrking
         """
+        cacheUrl = self._match_namespace(fileloc)
+        if cacheUrl:
+            return cacheUrl
+
         headers = await self.get_director_headers(fileloc)
-        metalist = parse_metalink(headers)[1:]
-        while len(metalist) > 0:
+        metalist, namespace = parse_metalink(headers)
+        goodEntry = False
+        cache_list = []
+        while metalist:
             updatedUrl = metalist[0][0]
-            metalist = metalist[1:]
             # Timeout response in seconds - the default response is 5 minutes
-            timeout = aiohttp.ClientTimeout(total=2)
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.get(updatedUrl, timeout=timeout) as resp:
-                        resp.status
-                except (aiohttp.client_exceptions.ClientConnectorError, FileNotFoundError, asyncio.TimeoutError, asyncio.exceptions.TimeoutError):
-                    continue
-                break
-        if len(metalist) == 0:
+            timeout = aiohttp.ClientTimeout(total=5)
+            session = await self.httpFileSystem.set_session()
+            try:
+                async with session.head(updatedUrl, timeout=timeout) as resp:
+                    pass
+                    break
+            except (aiohttp.client_exceptions.ClientConnectorError, FileNotFoundError, asyncio.TimeoutError, asyncio.exceptions.TimeoutError):
+                pass
+            metalist = metalist[1:]
+        if not metalist:
             # No working cache was found
-            raise RuntimeError
-        
+            raise NoAvailableSource()
+        with self._namespace_lock:
+            self._namespace_cache[namespace] = _CacheManager([i[0] for i in metalist])
+
         return updatedUrl
 
+    def _match_namespace(self, fileloc):
+        namespace_info = None
+        with self._namespace_lock:
+            prefixes = list(self._namespace_cache.keys())
+            prefixes.sort(reverse=True)
+            for prefix in prefixes:
+                if fileloc.startswith(prefix):
+                    namespace_info = self._namespace_cache.get(prefix)
+                    break
+        if not namespace_info:
+            return
+
+        return namespace_info.get_url(fileloc)
     
     def _dirlist_dec(func):
         """
@@ -153,22 +193,17 @@ class PelicanFileSystem(AsyncFileSystem):
         async for _ in self.httpFileSystem._walk(listUrl, maxdepth, on_error, **kwargs):
                 yield _
 
+    def open(self, path, **kwargs):
+        cache_url = sync(self.loop, self.get_working_cache, path)
+        return self.httpFileSystem.open(cache_url, **kwargs)
 
-    def _open(
+    async def open_async(
         self,
         path,
-        mode="rb",
-        block_size=None,
-        autocommit=None,  # XXX: This differs from the base class.
-        cache_type=None,
-        cache_options=None,
-        size=None,
         **kwargs,
     ):    
-        loop = asyncio.get_event_loop()
-        cache_url = loop.run_until_complete(self.get_working_cache(path))
-
-        return self.httpFileSystem._open(cache_url, mode, block_size, autocommit, cache_type, cache_options, size, **kwargs)
+        cache_url = await self.get_working_cache(path)
+        return self.httpFileSystem.open_async(cache_url, **kwargs)
     
 
 
@@ -269,3 +304,51 @@ def PelicanMap(root, pelfs, check=False, create=False):
     cache_url = loop.run_until_complete(pelfs.get_working_cache(root))
 
     return pelfs.get_mapper(cache_url, check=check, create=create)
+
+class _CacheManager(object):
+    """
+    Manage a list of caches.
+
+    Each entry in the namespace has an associated list of caches that are willing
+    to provide services to the client.  As the caches are used, if they timeout
+    or otherwise cause errors, they should be skipped for future operations.
+    """
+
+    def __init__(self, cache_list):
+        """
+        Construct a new cache manager from an ordered list of cache URL strings.
+        The cache URL is assumed to have the form of:
+            scheme://hostname[:port]
+        e.g., https://cache.example.com:8443 or http://cache2.example.com
+
+        The list ordering is assumed to be the order of preference; the first cache
+        in the list will be used until it's explicitly noted as bad.
+        """
+        self._lock = threading.Lock()
+        self._cache_list = []
+        # Work around any bugs where the director may return the same cache twice
+        cache_set = set()
+        for cache in cache_list:
+            parsed_url = urllib.parse.urlparse(cache)
+            parsed_url = parsed_url._replace(path="", query="", fragment="")
+            cache_str = parsed_url.geturl()
+            if cache_str in cache_set:
+                continue
+            cache_set.add(cache_str)
+            self._cache_list.append(parsed_url.geturl())
+
+    def get_url(self, obj_name):
+        """
+        Given an object name, return the currently-preferred
+        """
+        with self._lock:
+            if not self._cache_list:
+                raise NoAvailableSource()
+
+            return urllib.parse.urljoin(self._cache_list[0], obj_name)
+
+    def bad_cache(self, cache_url):
+        cache_url_parsed = urllib.parse.urlparse(cache_url)
+        cache_url_parsed = cache_url_parsed._replace(path="", query="", fragment="")
+        with self._lock:
+            self._cache_list.remove(cache_url_parsed.geturl())
