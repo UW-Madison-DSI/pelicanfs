@@ -252,8 +252,17 @@ class PelicanFileSystem(AsyncFileSystem):
     async def _expand_path(self, path, recursive=False, maxdepth=None):
         return await self.httpFileSystem._expand_path(path, recursive, maxdepth)
     
+class OSDFFileSystem(PelicanFileSystem):
+    """
+    A FSSpec AsyncFileSystem representing the OSDF
+    """
 
-fsspec.register_implementation(PelicanFileSystem.protocol, PelicanFileSystem)
+    protocol = "osdf"
+
+    def __init__(self, **kwargs):
+        # TODO: Once the base class takes `pelican://` URLs, switch to
+        # `pelican://osg-htc.org`
+        super().__init__("https://osdf-director.osg-htc.org", **kwargs)
 
 def PelicanMap(root, pelfs, check=False, create=False):
     loop = asyncio.get_event_loop()

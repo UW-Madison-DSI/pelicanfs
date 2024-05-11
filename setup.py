@@ -19,6 +19,12 @@ setup(
         "Programming Language :: Python :: 3 :: Only",
         "License :: OSI Approved :: Apache Software License",
     ],
+    entry_points={
+        'fsspec.specs': [
+            'pelican=pelicanfs.core.PelicanFileSystem',
+            'osdf=pelicanfs.core.OSDFFileSystem'
+        ],
+    },
     keywords="pelican, fsspec",
         packages=find_packages(
         where='src',
