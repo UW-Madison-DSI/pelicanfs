@@ -1,0 +1,4 @@
+build/
+src/pelicanfs.egg-info/
+src/pelicanfs/__pycache__/
+test/__pycache__/

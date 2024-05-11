@@ -19,6 +19,12 @@ setup(
         "Programming Language :: Python :: 3 :: Only",
         "License :: OSI Approved :: Apache Software License",
     ],
+    entry_points={
+        'fsspec.specs': [
+            'pelican=pelicanfs.core.PelicanFileSystem',
+            'osdf=pelicanfs.core.OSDFFileSystem'
+        ],
+    },
     keywords="pelican, fsspec",
         packages=find_packages(
         where='src',
@@ -36,7 +42,11 @@ setup(
                       "fsspec==2024.3.1",
                       "idna==3.7",
                       "multidict==6.0.5",
-                      "yarl==1.9.4"],
+                      "yarl==1.9.4",
+                      "cachetools~=5.3"],
+    extras_require={
+                    "testing": ["pytest", "pytest-httpserver"],
+                   },
     project_urls={
         "Source": "https://github.com/PelicanPlatform/pelicanfs",
         "Pelican Source": "https://github.com/PelicanPlatform/pelican",
