@@ -45,7 +45,7 @@ setup(
                       "yarl==1.9.4",
                       "cachetools~=5.3"],
     extras_require={
-                    "testing": ["pytest", "pytest-httpserver"],
+                    "testing": ["pytest", "pytest-httpserver", "trustme"],
                    },
     project_urls={
         "Source": "https://github.com/PelicanPlatform/pelicanfs",

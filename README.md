@@ -66,35 +66,26 @@ The following describes how to specify endpoints to get data from, rather than l
 
 #### Enabling Direct Reads
 
-Sometimes you might wish to read data directly from an origin rather than via a cache. To enable this at PelicanFileSystem creation, just pass in `dirReads=True` to the constructor.
+Sometimes you might wish to read data directly from an origin rather than via a cache. To enable this at PelicanFileSystem creation, just pass in `direct_reads=True` to the constructor.
 
 ```python
-pelfs = PelicanFileSystem("some-federation-url", dirReads=True)
-```
-
-Direct reads can also be turned on an off using the class function `set_direct_reads` like so:
-
-```python
-pelfs.set_direct_reads(True)
-hello_world_from_origin = pelfs.cat('/ospool/uc-shared/public/OSG-Staff/validation/test.txt')
+pelfs = PelicanFileSystem("pelican://osg-htc.org", direct_reads=True)
 ```
 
 #### Specifying a Cache
 
-If you want to specify a specific cache to stage your data into (as opposed to the highest priority working cache), this can be done by passing in a cache URL during PelicanFileSystem construction via the `specifiedCacheUrl` variable:
+If you want to specify a specific cache to stage your data into (as opposed to the highest priority working cache), this can be done by passing in a cache URL during PelicanFileSystem construction via the `preferred_caches` variable:
 
 ```python
-pelfs = PelicanFileSystem("some-federation-url", specifiedCacheUrl="some-cache-url")
+pelfs = PelicanFileSystem("pelican://osg-htc.org", preferred_caches=["https://cache.example.com"])
 ```
 
-Or by setting it via the `set_cache` function like so:
+or
 
 ```python
-pelfs.set_cache("some-cache-url")
+pelfs = PelicanFileSystem("pelican://osg-htc.org", preferred_caches=["https://cache.example.com",
+    "https://cache2.example.com", "+"])
 ```
 
-You can clear the specifed cache by calling the `reset_cache` function:
-
-```python
-pelfs.reset_cache()
-```
+Note that the special cache value `"+"` indicates that the provided preferred caches should be prepended to the
+list of caches from the director.
