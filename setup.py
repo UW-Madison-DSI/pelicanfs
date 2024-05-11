@@ -44,6 +44,9 @@ setup(
                       "multidict==6.0.5",
                       "yarl==1.9.4",
                       "cachetools~=5.3"],
+    extras_require={
+                    "testing": ["pytest", "pytest-httpserver"],
+                   },
     project_urls={
         "Source": "https://github.com/PelicanPlatform/pelicanfs",
         "Pelican Source": "https://github.com/PelicanPlatform/pelican",
