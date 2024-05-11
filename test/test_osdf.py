@@ -15,8 +15,14 @@ limitations under the License.
 """
 
 import fsspec
+import pelicanfs.core
 
 def test_osdf():
     with fsspec.open("osdf:///ospool/uc-shared/public/OSG-Staff/validation/test.txt") as of:
         data = of.read()
+    assert data == b'Hello, World!\n'
+
+def test_osdf_direct():
+    pelfs = pelicanfs.core.PelicanFileSystem("pelican://osg-htc.org", direct_reads=True)
+    data = pelfs.cat("/ospool/uc-shared/public/OSG-Staff/validation/test.txt")
     assert data == b'Hello, World!\n'
