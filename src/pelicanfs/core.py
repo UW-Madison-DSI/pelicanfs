@@ -112,7 +112,7 @@ class PelicanFileSystem(AsyncFileSystem):
     
     def __init__ (
             self,
-            federationDiscoveryUrl,
+            federationDiscoveryUrl="",
             direct_reads = False,
             preferred_caches = [],
             asynchronous = False,
@@ -299,8 +299,9 @@ class PelicanFileSystem(AsyncFileSystem):
         """
         async def wrapper(self, *args, **kwargs):
             path = args[0]
-            parsedUrl = urllib.parse.urlparse(path)
-            listUrl = await self.get_origin_url(parsedUrl.path)
+            path = self._check_fspath(path)
+            # TODO: need to have a separate get_dirlist_url
+            listUrl = await self.get_origin_url(path)
             result = await func(self, listUrl, *args[1:], **kwargs)
             return result
         return wrapper
@@ -319,8 +320,9 @@ class PelicanFileSystem(AsyncFileSystem):
     
     # Not using a decorator because it requires a yield
     async def _walk(self, path, maxdepth=None, on_error="omit", **kwargs):
-        parsedUrl = urllib.parse.urlparse(path)
-        listUrl = await self.get_origin_url(parsedUrl.path)
+        path = self._check_fspath(path)
+        # TODO: need to have a separate get_dirlist_url
+        listUrl = await self.get_origin_url(path)
         async for _ in self.httpFileSystem._walk(listUrl, maxdepth, on_error, **kwargs):
                 yield _
 
@@ -351,13 +353,32 @@ class PelicanFileSystem(AsyncFileSystem):
 
         return io_wrapper
 
+    def _check_fspath(self, path: str) -> str:
+        """
+        Given a path (either absolute or a pelican://-style URL),
+        check that the pelican://-style URL is compatible with the current
+        filesystem object and return the path.
+        """
+        if not path.startswith("/"):
+            pelican_url = urllib.parse.urlparse("pelican://" + path)
+            discovery_url = pelican_url._replace(path="/", fragment="", query="", params="")
+            discovery_str = discovery_url.geturl()
+            if not self.discoveryUrl:
+                self.discoveryUrl = discovery_str
+            elif self.discoveryUrl != discovery_str:
+                raise InvalidMetadata()
+            path = pelican_url.path
+        return path
+
     def open(self, path, **kwargs):
+        path = self._check_fspath(path)
         data_url = sync(self.loop, self.get_origin_cache if self.directReads else self.get_working_cache, path)
         fp = self.httpFileSystem.open(data_url, **kwargs)
         fp.read = self._io_wrapper(fp.read)
         return fp
     
     async def open_async(self, path, **kwargs):
+        path = self._check_fspath(path)
         if self.directReads:
             data_url = await self.get_origin_cache(path)
         else:
@@ -377,15 +398,11 @@ class PelicanFileSystem(AsyncFileSystem):
         a cache
         """
         async def wrapper(self, *args, **kwargs):
-            path = args[0]
-            parsedUrl = urllib.parse.urlparse(path)
-            if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
-                dataUrl = path
+            path = self._check_fspath(args[0])
+            if self.directReads:
+                dataUrl = await self.get_origin_url(path)
             else:
-                if self.directReads:
-                    dataUrl = await self.get_origin_url(parsedUrl.path)
-                else:
-                    dataUrl = await self.get_working_cache(parsedUrl.path)
+                dataUrl = await self.get_working_cache(path)
             try:
                 result = await func(self, dataUrl, *args[1:], **kwargs)
             except:
@@ -406,25 +423,19 @@ class PelicanFileSystem(AsyncFileSystem):
         async def wrapper(self, *args, **kwargs):
             path = args[0]
             if isinstance(path, str):
-                parsedUrl = urllib.parse.urlparse(path)
-                if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
-                    dataUrl = path
+                path = self._check_fspath(args[0])
+                if self.directReads:
+                    dataUrl = await self.get_origin_url(path)
                 else:
-                    if self.directReads:
-                        dataUrl = await self.get_origin_url(parsedUrl.path)
-                    else:
-                        dataUrl = await self.get_working_cache(parsedUrl.path)
+                    dataUrl = await self.get_working_cache(path)
             else:
                 dataUrl = []
                 for p in path:
-                    parsedUrl = urllib.parse.urlparse(p)
-                    if parsedUrl.scheme == "http" or parsedUrl.scheme == "https":
-                        dUrl = p
+                    p = self._check_fspath(p)
+                    if self.directReads:
+                        dUrl = await self.get_origin_url(p)
                     else:
-                        if self.directReads:
-                            dUrl = await self.get_origin_url(parsedUrl.path)
-                        else:
-                            dUrl =  await self.get_working_cache(parsedUrl.path)
+                        dUrl =  await self.get_working_cache(p)
                     dataUrl.append(dUrl)
             try:
                 result = await func(self, dataUrl, *args[1:], **kwargs)
