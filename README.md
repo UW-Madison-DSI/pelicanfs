@@ -1,5 +1,7 @@
 # PelicanFS
 
+[![DOI](https://zenodo.org/badge/751984532.svg)](https://zenodo.org/doi/10.5281/zenodo.13376216)
+
 ## Overview
 
 PelicanFS is a file system interface (fsspec) for the Pelican Platform.  For more information about pelican, see our [main website](https://pelicanplatform.org) or [Github page](https://github.com/PelicanPlatform/pelican). For more information about fsspec, visit the [filesystem-spec](https://filesystem-spec.readthedocs.io/en/latest/index.html) page.
